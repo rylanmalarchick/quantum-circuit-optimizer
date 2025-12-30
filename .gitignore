@@ -14,7 +14,7 @@ out/
 # Executables
 quantum_circuit_optimizer
 test_*
-!tests/test_*.cpp
+!tests/**/test_*.cpp
 
 # IDE and tool caches
 .idea/
