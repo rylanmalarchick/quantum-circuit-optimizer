@@ -1,0 +1,64 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# Compiled objects
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+
+# Executables
+quantum_circuit_optimizer
+test_*
+!tests/test_*.cpp
+
+# IDE and tool caches
+.idea/
+.vscode/
+.cache/
+*.swp
+*.swo
+*~
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+_deps/
+
+# Google Test
+Testing/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Profiling
+*.prof
+*.gcda
+*.gcno
+*.gcov
+
+# Editor backups
+*.bak
+*.orig
