@@ -2,7 +2,7 @@
 
 A production-quality quantum circuit compiler in C++17 that parses OpenQASM 3.0, optimizes circuits through multiple passes, and performs topology-aware qubit routing.
 
-[![Build Status](https://github.com/username/quantum-circuit-optimizer/workflows/CI/badge.svg)](https://github.com/username/quantum-circuit-optimizer/actions)
+[![Build Status](https://github.com/rylanmalarchick/quantum-circuit-optimizer/workflows/CI/badge.svg)](https://github.com/rylanmalarchick/quantum-circuit-optimizer/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://isocpp.org/std/the-standard)
 
@@ -30,7 +30,7 @@ This project implements a complete quantum circuit compilation pipeline:
 
 ```bash
 # Clone and build
-git clone https://github.com/username/quantum-circuit-optimizer.git
+git clone https://github.com/rylanmalarchick/quantum-circuit-optimizer.git
 cd quantum-circuit-optimizer
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
