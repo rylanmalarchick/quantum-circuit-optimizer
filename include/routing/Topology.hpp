@@ -332,19 +332,23 @@ public:
     }
 
     /**
-     * @brief Creates an IBM heavy-hex topology.
+     * @brief Creates a heavy-hex lattice topology.
      *
-     * The heavy-hex lattice is IBM's preferred topology for their quantum
-     * processors. It consists of hexagonal cells with additional "heavy"
-     * qubits on each edge.
+     * The heavy-hex lattice (IBM's processor family) is a hexagonal lattice in
+     * which every edge carries an extra degree-2 "link" qubit. Lattice vertices
+     * therefore have degree at most 3 and link qubits have degree exactly 2 --
+     * the low-degree property the architecture is built around.
      *
-     * For simplicity, this implementation creates a heavy-hex pattern
-     * with 'd' distance code, resulting in approximately 3*d^2 qubits.
+     * The construction lays out a honeycomb of (2d+1) x (2d+1) vertex sites as a
+     * brick wall (horizontal edges everywhere, vertical edges only where
+     * row + col is even, which caps vertex degree at 3) and then subdivides each
+     * edge with one link qubit. The qubit count grows with d; call numQubits()
+     * for the exact size.
      *
      * Reference: Chamberland et al., "Topological and Subsystem Codes on
-     * Low-Degree Graphs with Flag Qubits" (2020)
+     * Low-Degree Graphs with Flag Qubits", Phys. Rev. X 10, 011022 (2020).
      *
-     * @param d Distance parameter (1, 2, 3, ...)
+     * @param d Lattice size parameter (1, 2, 3, ...)
      * @return Heavy-hex topology
      */
     [[nodiscard]] static Topology heavyHex(std::size_t d) {
@@ -352,64 +356,32 @@ public:
             throw std::invalid_argument("Heavy-hex distance must be positive");
         }
 
-        // For d=1: simple 7-qubit hexagon with center
-        // For larger d: build a lattice of heavy hexagons
-        if (d == 1) {
-            // Basic heavy-hex unit cell (7 qubits)
-            // Layout:
-            //     0---1
-            //   /       |
-            //  5    6    2
-            //   |       /
-            //     4---3
-            Topology t(7);
-            t.addEdge(0, 1);
-            t.addEdge(1, 2);
-            t.addEdge(2, 3);
-            t.addEdge(3, 4);
-            t.addEdge(4, 5);
-            t.addEdge(5, 0);
-            // Connect center to all edges
-            t.addEdge(6, 0);
-            t.addEdge(6, 1);
-            t.addEdge(6, 2);
-            t.addEdge(6, 3);
-            t.addEdge(6, 4);
-            t.addEdge(6, 5);
-            return t;
-        }
+        const std::size_t rows = 2 * d + 1;
+        const std::size_t cols = 2 * d + 1;
+        const std::size_t num_vertices = rows * cols;
+        auto vertex = [cols](std::size_t r, std::size_t c) { return r * cols + c; };
 
-        // For d >= 2: Build a larger heavy-hex lattice
-        // Use a simplified model: create d x d hexagonal cells
-        // Each cell has 6 boundary qubits + 1 center qubit, with shared edges
-        // Total qubits approximately: 2*d*(d+1) + d*d (simplified formula)
-        std::size_t n = 5 * d * d + 4 * d + 1;  // Approximate
-        Topology t(n);
-
-        // Build as a modified grid with heavy-hex connectivity pattern
-        // This is a simplified approximation of IBM's actual topology
-        std::size_t rows = 2 * d + 1;
-        std::size_t cols = 2 * d + 1;
-        n = rows * cols;
-        t = Topology(n);
-
+        // Honeycomb (brick-wall) edges between vertex sites; degree <= 3.
+        std::vector<Edge> hex_edges;
         for (std::size_t r = 0; r < rows; ++r) {
             for (std::size_t c = 0; c < cols; ++c) {
-                std::size_t q = r * cols + c;
-
-                // Horizontal connections (every other row has different pattern)
                 if (c + 1 < cols) {
-                    // Connect horizontally
-                    t.addEdge(q, q + 1);
+                    hex_edges.emplace_back(vertex(r, c), vertex(r, c + 1));
                 }
-
-                // Vertical connections (heavy-hex pattern)
-                if (r + 1 < rows && (c % 2 == r % 2)) {
-                    t.addEdge(q, q + cols);
+                if (r + 1 < rows && (r + c) % 2 == 0) {
+                    hex_edges.emplace_back(vertex(r, c), vertex(r + 1, c));
                 }
             }
         }
 
+        // Subdivide each edge with a degree-2 link qubit (the "heavy" sites).
+        Topology t(num_vertices + hex_edges.size());
+        std::size_t link = num_vertices;
+        for (const auto& [u, v] : hex_edges) {
+            t.addEdge(u, link);
+            t.addEdge(link, v);
+            ++link;
+        }
         return t;
     }
 

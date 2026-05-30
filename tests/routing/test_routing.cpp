@@ -257,16 +257,31 @@ TEST(TopologyTest, GridValidation) {
     EXPECT_THROW((void)Topology::grid(3, 0), std::invalid_argument);
 }
 
-TEST(TopologyTest, HeavyHexD1) {
-    auto t = Topology::heavyHex(1);
-    EXPECT_EQ(t.numQubits(), 7);
-    EXPECT_TRUE(t.isConnected());
+TEST(TopologyTest, HeavyHexHasDegreeAtMostThree) {
+    // The defining heavy-hex property: every qubit has degree <= 3. (The old
+    // d=1 "wheel" had a degree-6 centre and was not heavy-hex.)
+    for (std::size_t d = 1; d <= 3; ++d) {
+        auto t = Topology::heavyHex(d);
+        EXPECT_TRUE(t.isConnected()) << "disconnected at d=" << d;
+        for (std::size_t q = 0; q < t.numQubits(); ++q) {
+            EXPECT_LE(t.neighbors(q).size(), 3u)
+                << "qubit " << q << " exceeds degree 3 at d=" << d;
+        }
+    }
 }
 
-TEST(TopologyTest, HeavyHexD2) {
+TEST(TopologyTest, HeavyHexHasDegreeTwoLinkQubits) {
+    // Subdividing every edge yields link qubits of degree exactly 2.
     auto t = Topology::heavyHex(2);
-    EXPECT_TRUE(t.isConnected());
-    EXPECT_GT(t.numQubits(), 7);
+    std::size_t degree_two = 0;
+    for (std::size_t q = 0; q < t.numQubits(); ++q) {
+        if (t.neighbors(q).size() == 2) ++degree_two;
+    }
+    EXPECT_GT(degree_two, 0u);
+}
+
+TEST(TopologyTest, HeavyHexGrowsWithDistance) {
+    EXPECT_GT(Topology::heavyHex(2).numQubits(), Topology::heavyHex(1).numQubits());
 }
 
 TEST(TopologyTest, HeavyHexValidation) {
