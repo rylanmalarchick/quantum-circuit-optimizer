@@ -746,19 +746,73 @@ TEST(CommutationPassTest, DisjointGatesCommute) {
 }
 
 TEST(CommutationPassTest, PreservesCircuitSemantics) {
-    // After commutation, circuit should have same gates
+    // Reordering must keep both the gate count and the unitary unchanged.
     Circuit circuit(2);
     circuit.addGate(Gate::h(0));
     circuit.addGate(Gate::z(0));
     circuit.addGate(Gate::cnot(0, 1));
-    
+
     DAG dag = DAG::fromCircuit(circuit);
     std::size_t initial_count = dag.numNodes();
-    
+
     CommutationPass pass;
     pass.run(dag);
-    
-    EXPECT_EQ(dag.numNodes(), initial_count);  // Same gate count
+
+    EXPECT_EQ(dag.numNodes(), initial_count);
+    EXPECT_TRUE(test::circuitsEquivalent(circuit, dag.toCircuit()));
+}
+
+TEST(CommutationPassTest, EnablesCancellationThroughControl) {
+    // Z commutes through a CNOT control, so Z; CNOT; Z lets the Z gates meet
+    // and cancel, leaving just the CNOT.
+    Circuit circuit(2);
+    circuit.addGate(Gate::z(0));
+    circuit.addGate(Gate::cnot(0, 1));
+    circuit.addGate(Gate::z(0));
+    Circuit before = circuit.clone();
+
+    PassManager pm;
+    pm.addPass(std::make_unique<CommutationPass>());
+    pm.addPass(std::make_unique<CancellationPass>());
+    pm.run(circuit);
+
+    EXPECT_EQ(circuit.numGates(), 1u);
+    EXPECT_EQ(circuit.gate(0).type(), GateType::CNOT);
+    EXPECT_TRUE(test::circuitsEquivalent(before, circuit));
+}
+
+TEST(CommutationPassTest, EnablesRotationMergeThroughControl) {
+    // Rz on the control commutes through CNOT; the two Rz then merge.
+    Circuit circuit(2);
+    circuit.addGate(Gate::rz(0, constants::PI_4));
+    circuit.addGate(Gate::cnot(0, 1));
+    circuit.addGate(Gate::rz(0, constants::PI_4));
+    Circuit before = circuit.clone();
+
+    PassManager pm;
+    pm.addPass(std::make_unique<CommutationPass>());
+    pm.addPass(std::make_unique<RotationMergePass>());
+    pm.run(circuit);
+
+    EXPECT_EQ(circuit.numGates(), 2u);  // merged Rz + CNOT
+    EXPECT_TRUE(test::circuitsEquivalent(before, circuit));
+}
+
+TEST(CommutationPassTest, DoesNotReorderNonCommutingGates) {
+    // H does not commute with Rz; the unitary must be intact after the pass.
+    Circuit circuit(3);
+    circuit.addGate(Gate::rz(0, constants::PI_4));
+    circuit.addGate(Gate::cnot(0, 1));
+    circuit.addGate(Gate::rz(0, constants::PI_4));
+    circuit.addGate(Gate::h(0));
+    circuit.addGate(Gate::cnot(2, 0));
+    circuit.addGate(Gate::z(2));
+
+    DAG dag = DAG::fromCircuit(circuit);
+    CommutationPass pass;
+    pass.run(dag);
+
+    EXPECT_TRUE(test::circuitsEquivalent(circuit, dag.toCircuit()));
 }
 
 // =============================================================================

@@ -618,6 +618,65 @@ public:
     }
 
     /**
+     * @brief Checks if @p b can be swapped with the immediately-earlier @p a.
+     *
+     * True when the two gates share at least one qubit and, on every shared
+     * wire, @p b is the immediate successor of @p a (nothing intervenes). This
+     * is the structural precondition for swapAdjacent; the caller must
+     * separately decide that the gates commute.
+     */
+    [[nodiscard]] bool canSwapAdjacent(GateId a, GateId b) const {
+        if (!hasNode(a) || !hasNode(b)) return false;
+        const auto& qa = node(a).gate().qubits();
+        const auto& qb = node(b).gate().qubits();
+        bool shared = false;
+        for (QubitIndex q : qa) {
+            if (std::find(qb.begin(), qb.end(), q) == qb.end()) continue;
+            shared = true;
+            if (wireSuccessor(a, q) != b) return false;  // a gate intervenes on q
+        }
+        return shared;
+    }
+
+    /**
+     * @brief Reorders directly-adjacent gates so @p a follows @p b.
+     *
+     * Precondition: canSwapAdjacent(a, b). The caller must have verified the
+     * gates commute; this only rewires per-wire links (pa -> b -> a -> sb on
+     * each shared wire) and rebuilds node-level edges. Acyclicity is preserved
+     * because transposing two adjacent, commuting gates is a valid reordering.
+     */
+    void swapAdjacent(GateId a, GateId b) {
+        DAGNode& na = node(a);
+        DAGNode& nb = node(b);
+        std::vector<GateId> affected{a, b};
+        for (QubitIndex q : na.gate().qubits()) {
+            if (wireNeighbor(na.wire_succ_, q) != b) continue;  // not a shared/adjacent wire
+            const GateId pa = wireNeighbor(na.wire_pred_, q);
+            const GateId sb = wireNeighbor(nb.wire_succ_, q);
+
+            if (pa != INVALID_GATE_ID) {
+                nodes_.at(pa)->wire_succ_[q] = b;
+                nb.wire_pred_[q] = pa;
+                affected.push_back(pa);
+            } else {
+                nb.wire_pred_.erase(q);
+            }
+            nb.wire_succ_[q] = a;
+            na.wire_pred_[q] = b;
+            if (sb != INVALID_GATE_ID) {
+                na.wire_succ_[q] = sb;
+                nodes_.at(sb)->wire_pred_[q] = a;
+                affected.push_back(sb);
+            } else {
+                na.wire_succ_.erase(q);
+            }
+            if (last_gate_on_qubit_[q] == b) last_gate_on_qubit_[q] = a;
+        }
+        refreshNodeLevelEdgesFor(affected);
+    }
+
+    /**
      * @brief Returns all edges in the DAG.
      * @return Vector of (from, to) pairs
      */
@@ -692,6 +751,28 @@ private:
         if (std::find(succs.begin(), succs.end(), to_id) == succs.end()) {
             nodes_.at(from_id)->addSuccessor(to_id);
             nodes_.at(to_id)->addPredecessor(from_id);
+        }
+    }
+
+    /// @brief Recomputes node-level edges for a set of nodes from their wires.
+    ///
+    /// Only edges incident to @p ids can have changed, so this is local work.
+    void refreshNodeLevelEdgesFor(const std::vector<GateId>& ids) {
+        // Phase 1: detach every node-level edge incident to a listed node.
+        for (GateId id : ids) {
+            if (!hasNode(id)) continue;
+            DAGNode& n = *nodes_.at(id);
+            for (GateId s : n.successors_) nodes_.at(s)->removePredecessor(id);
+            for (GateId p : n.predecessors_) nodes_.at(p)->removeSuccessor(id);
+            n.successors_.clear();
+            n.predecessors_.clear();
+        }
+        // Phase 2: re-add from the (now updated) per-wire links.
+        for (GateId id : ids) {
+            if (!hasNode(id)) continue;
+            DAGNode& n = *nodes_.at(id);
+            for (const auto& [q, succ] : n.wire_succ_) { (void)q; addNodeLevelEdge(id, succ); }
+            for (const auto& [q, pred] : n.wire_pred_) { (void)q; addNodeLevelEdge(pred, id); }
         }
     }
 

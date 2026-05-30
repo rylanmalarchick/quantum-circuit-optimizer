@@ -43,8 +43,9 @@ namespace qopt::passes {
  *
  * Example:
  * @code
- * // Before: Z q[0]; X q[1]; Z q[0];  (Z gates separated)
- * // After:  X q[1]; Z q[0]; Z q[0];  (Z gates adjacent, can cancel)
+ * // Before: Z q[0]; CNOT q[0], q[1]; Z q[0];
+ * // After:  Z q[0]; Z q[0]; CNOT q[0], q[1];  (Z commutes through the control;
+ * //                                            the two Z gates then cancel)
  *
  * CommutationPass pass;
  * pass.run(dag);
@@ -61,46 +62,44 @@ public:
     void run(ir::DAG& dag) override {
         resetStatistics();
 
-        // We don't directly add/remove gates, just reorder
-        // Track the number of swaps performed for statistics
-        std::size_t swaps_performed = 0;
-
-        // Iterate until no more changes
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            std::vector<GateId> order = dag.topologicalOrder();
-
-            // Try to move each gate earlier if it commutes with predecessor
-            for (GateId id : order) {
-                if (!dag.hasNode(id)) continue;
-
-                const ir::DAGNode& node = dag.node(id);
-
-                // Try to swap with each predecessor
-                for (GateId pred_id : node.predecessors()) {
-                    if (!dag.hasNode(pred_id)) continue;
-
-                    // Check if swapping would be beneficial
-                    if (shouldSwap(dag, pred_id, id)) {
-                        // Perform the swap in the DAG
-                        if (swapNodes(dag, pred_id, id)) {
-                            swaps_performed++;
-                            changed = true;
-                            break;  // Restart iteration after change
-                        }
-                    }
-                }
-                if (changed) break;
-            }
+        // Greedily move commuting gates together so a later cancellation or
+        // merge pass can act on them. Each accepted swap reorders one adjacent
+        // commuting pair and never changes gate count. Work proceeds in full
+        // sweeps; the sweep count is bounded by the gate count so the pass
+        // always terminates (JPL Rule 2: every loop has a fixed bound).
+        const std::size_t max_sweeps = dag.numNodes() + 1;
+        for (std::size_t sweep = 0; sweep < max_sweeps; ++sweep) {
+            if (!sweepOnce(dag)) break;
         }
-
-        // Statistics: we don't remove gates, but track reordering
-        // Could expose swaps_performed via a method if needed
-        (void)swaps_performed;
     }
 
 private:
+    /**
+     * @brief One reordering sweep over the DAG in topological order.
+     *
+     * For each gate, performs at most one beneficial swap with an adjacent,
+     * commuting successor (one whose reorder places a gate next to a cancel or
+     * merge partner).
+     *
+     * @return true if any swap was made during the sweep
+     */
+    bool sweepOnce(ir::DAG& dag) {
+        bool changed = false;
+        for (GateId a : dag.topologicalOrder()) {
+            if (!dag.hasNode(a)) continue;
+            // Copy the successor list: swapAdjacent rewires edges mid-iteration.
+            const std::vector<GateId> succs = dag.node(a).successors();
+            for (GateId b : succs) {
+                if (dag.canSwapAdjacent(a, b) && shouldSwap(dag, a, b)) {
+                    dag.swapAdjacent(a, b);
+                    changed = true;
+                    break;  // a has moved; continue the sweep from the next gate
+                }
+            }
+        }
+        return changed;
+    }
+
     /**
      * @brief Checks if a gate is diagonal (commutes with other diagonals).
      *
@@ -210,40 +209,35 @@ private:
     }
 
     /**
-     * @brief Determines if swapping two nodes would be beneficial.
+     * @brief Determines whether reordering the adjacent pair (a, b) helps.
      *
-     * Swapping is beneficial if it would bring together gates that
-     * could cancel or merge.
+     * @p a is the earlier gate and @p b its immediate successor. Moving @p b
+     * ahead of @p a places it next to @p a's predecessor on each shared wire;
+     * that is worthwhile only if the predecessor can then cancel or merge with
+     * @p b. Correctness does not depend on this heuristic: the later pass
+     * re-checks adjacency before acting, so a wasted swap is harmless.
      *
      * @param dag The DAG
-     * @param id1 Predecessor gate ID
-     * @param id2 Successor gate ID
-     * @return true if swap is beneficial
+     * @param a Earlier gate ID
+     * @param b Immediate-successor gate ID
+     * @return true if the swap is worth performing
      */
-    [[nodiscard]] static bool shouldSwap(
-            const ir::DAG& dag,
-            GateId id1,
-            GateId id2) {
-        const ir::Gate& g1 = dag.node(id1).gate();
-        const ir::Gate& g2 = dag.node(id2).gate();
+    [[nodiscard]] static bool shouldSwap(const ir::DAG& dag, GateId a, GateId b) {
+        const ir::Gate& ga = dag.node(a).gate();
+        const ir::Gate& gb = dag.node(b).gate();
 
-        // Must commute to be swappable
-        if (!commute(g1, g2)) {
+        if (!commute(ga, gb)) {
             return false;
         }
 
-        // Beneficial if g2 would become adjacent to a gate it can cancel with
-        // Check if g1 has a predecessor that g2 could cancel with
-        for (GateId pred_of_g1 : dag.node(id1).predecessors()) {
-            if (!dag.hasNode(pred_of_g1)) continue;
-            const ir::Gate& pred_gate = dag.node(pred_of_g1).gate();
-
-            // Would g2 be able to cancel with this predecessor?
-            if (couldCancel(pred_gate, g2) || couldMerge(pred_gate, g2)) {
+        for (QubitIndex q : ga.qubits()) {
+            const GateId pa = dag.wirePredecessor(a, q);
+            if (pa == INVALID_GATE_ID) continue;
+            const ir::Gate& gpa = dag.node(pa).gate();
+            if (couldCancel(gpa, gb) || couldMerge(gpa, gb)) {
                 return true;
             }
         }
-
         return false;
     }
 
@@ -288,38 +282,6 @@ private:
         return false;
     }
 
-    /**
-     * @brief Swaps two adjacent nodes in the DAG.
-     *
-     * This is a complex operation that rewires edges to swap the
-     * order of execution while maintaining DAG validity.
-     *
-     * @param dag The DAG to modify
-     * @param id1 Predecessor node
-     * @param id2 Successor node (must be direct successor of id1)
-     * @return true if swap was successful
-     */
-    [[nodiscard]] static bool swapNodes(
-            ir::DAG& dag,
-            GateId id1,
-            GateId id2) {
-        // Swapping nodes in a DAG is complex and can break invariants.
-        // For now, we implement a conservative approach:
-        // Only swap if they share no qubits (fully independent on those edges)
-        
-        const ir::Gate& g1 = dag.node(id1).gate();
-        const ir::Gate& g2 = dag.node(id2).gate();
-
-        if (qubitsOverlap(g1, g2)) {
-            // Cannot safely swap overlapping gates in DAG representation
-            // The commutation is logical but DAG edges are qubit-based
-            return false;
-        }
-
-        // For non-overlapping gates, they shouldn't have an edge anyway
-        // This means they're already independent and "swappable"
-        return false;  // No actual swap needed
-    }
 };
 
 }  // namespace qopt::passes
