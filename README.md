@@ -1,6 +1,6 @@
 # Quantum Circuit Optimizer
 
-A production-quality quantum circuit compiler in C++17 that parses OpenQASM 3.0, optimizes circuits through multiple passes, and performs topology-aware qubit routing.
+A quantum circuit compiler in C++17 that parses OpenQASM 3.0, optimizes circuits through multiple passes, and performs topology-aware qubit routing.
 
 [![Build Status](https://github.com/rylanmalarchick/quantum-circuit-optimizer/workflows/CI/badge.svg)](https://github.com/rylanmalarchick/quantum-circuit-optimizer/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -21,10 +21,10 @@ This project implements a complete quantum circuit compilation pipeline:
 |---------|-------------|
 | **OpenQASM 3.0 Parser** | Parse quantum circuits from standard format |
 | **DAG Representation** | Efficient dependency graph for optimization |
-| **4 Optimization Passes** | Reduce gate count by 10-30% |
-| **SABRE Routing** | State-of-the-art qubit mapping algorithm |
-| **Multiple Topologies** | Linear, ring, grid, heavy-hex support |
-| **340 Unit Tests** | Comprehensive test coverage |
+| **4 Optimization Passes** | Cancellation, commutation, rotation merge, identity elimination |
+| **SABRE Routing** | Reverse-traversal initial mapping with heuristic SWAP insertion |
+| **Multiple Topologies** | Linear, ring, grid, heavy-hex, IQM Garnet |
+| **362 Unit Tests** | Unit tests plus statevector equivalence checks |
 
 ## Quick Start
 
@@ -98,12 +98,12 @@ int main() {
 
 ### Optimization Passes
 
-| Pass | Description | Typical Reduction |
-|------|-------------|------------------|
-| CancellationPass | Remove inverse pairs (HH, XX, CNOT·CNOT) | 5-15% |
-| CommutationPass | Reorder gates to expose optimizations | 2-5% |
-| RotationMergePass | Combine rotations: Rz(a)Rz(b) → Rz(a+b) | 5-10% |
-| IdentityEliminationPass | Remove identity gates: Rz(0) | 1-3% |
+| Pass | Description |
+|------|-------------|
+| CancellationPass | Remove adjacent inverse pairs (HH, XX, CNOT·CNOT) |
+| CommutationPass | Reorder commuting gates to expose cancellations |
+| RotationMergePass | Combine rotations: Rz(a)Rz(b) → Rz(a+b) |
+| IdentityEliminationPass | Remove identity rotations: Rz(0), Rz(2π) |
 
 ### Hardware Topologies
 
@@ -142,7 +142,7 @@ quantum-circuit-optimizer/
 │   └── routing/               # Qubit Routing
 │       ├── Topology.hpp       # Device topology
 │       └── SabreRouter.hpp    # SABRE algorithm
-├── tests/                     # 340 unit tests
+├── tests/                     # 362 unit tests
 ├── examples/                  # Example programs
 ├── benchmarks/                # Performance benchmarks
 └── docs/                      # Documentation
@@ -178,16 +178,16 @@ cmake --build build --target docs
 ## Test Results
 
 ```
-340 tests passed, 0 tests failed
+362 tests passed, 0 tests failed
 
 Test Categories:
   Gate tests:          26
   Circuit tests:       24
   DAG tests:           54
   Lexer tests:         58
-  Parser tests:        51
-  Optimization tests:  64
-  Routing tests:       63
+  Parser tests:        54
+  Optimization tests:  75
+  Routing tests:       71
 ```
 
 ## Benchmarks
@@ -197,16 +197,18 @@ Run the benchmark suite:
 ```bash
 cmake -B build -DBUILD_BENCHMARKS=ON
 cmake --build build
-./build/benchmarks/benchmark_circuits
+./build/benchmark_circuits
 ```
 
-Sample results:
+Sample results (deterministic; reproduce with the command above). Structured
+circuits such as QFT and QAOA carry little adjacent redundancy for these passes
+to remove, so their reduction is 0%; random circuits show real reductions:
 
 | Circuit | Qubits | Original | Optimized | Routed | SWAPs | Opt % |
 |---------|--------|----------|-----------|--------|-------|-------|
-| QFT-8 | 8 | 148 | 140 | 158 | 6 | 5.4% |
-| Random-20x500 | 20 | 500 | 465 | 512 | 15 | 7.0% |
-| QAOA-10-p2 | 10 | 52 | 48 | 52 | 2 | 7.7% |
+| QFT-8 | 8 | 120 | 120 | 141 | 21 | 0.0% |
+| Random-20x500 | 20 | 500 | 432 | 718 | 286 | 13.6% |
+| QAOA-10-p2 | 10 | 90 | 90 | 90 | 0 | 0.0% |
 
 ## Documentation
 

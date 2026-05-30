@@ -109,7 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - TrivialRouter for testing (identity mapping)
 
 - **SABRE router** (`include/routing/SabreRouter.hpp`)
-  - State-of-the-art SABRE algorithm implementation
+  - SABRE-based heuristic routing
   - Reference: Li et al., ASPLOS 2019
   - Heuristic SWAP selection with lookahead
   - Configurable parameters: lookahead depth, decay factor, extended set weight
@@ -156,6 +156,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GoogleTest v1.14.0 (fetched automatically)
 
 ## [Unreleased]
+
+### Fixed
+- **CancellationPass** cancelled two-qubit gates separated by a gate on one of
+  their wires (e.g. `CNOT; X(control); CNOT`), silently changing the circuit's
+  unitary. The DAG now tracks per-wire adjacency and a pair cancels only if it
+  is adjacent on every shared qubit.
+- **CommutationPass** was a no-op (its swap routine always returned false); it
+  now actually reorders commuting gates to expose cancellations and merges.
+- **Parser** reported only the first error; it now recovers and reports
+  multiple errors, and rejects undeclared registers and out-of-range qubit
+  indices instead of dropping them silently.
+- **SABRE router** used an identity initial mapping and reported it as such even
+  after routing; it now computes an initial mapping by reverse traversal and
+  records the true mapping.
+- **heavyHex** produced a 7-qubit wheel (degree-6 centre) for d=1 and a plain
+  honeycomb otherwise; it now builds an actual heavy-hex lattice (vertices of
+  degree <= 3, degree-2 link qubits).
+- Benchmark and CI no longer crash: the qubit cap was too low for the bundled
+  circuits, and the CI step invoked the CLI with no arguments.
+
+### Changed
+- `MAX_QUBITS` raised from 30 to 1024 (the library is symbolic; the old
+  "simulation limit" rationale did not apply).
+- Added a statevector equivalence simulator used in tests to verify that
+  optimization and routing preserve the circuit unitary.
 
 ### Planned
 - Gate definitions (`gate mygate(a) q { ... }`)

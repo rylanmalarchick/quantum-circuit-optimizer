@@ -1,6 +1,6 @@
 # Quantum Circuit Optimizer
 
-A production-quality quantum circuit compiler written in C++17.
+A quantum circuit compiler written in C++17.
 
 ## Overview
 
@@ -79,7 +79,7 @@ int main() {
 
 - **Topology**: Graph-based hardware connectivity representation
 - **Factory topologies**: Linear, ring, grid, heavy-hex
-- **SABRE Router**: State-of-the-art routing algorithm with SWAP insertion
+- **SABRE Router**: reverse-traversal initial mapping with heuristic SWAP insertion
 - **Configurable**: Lookahead depth, decay factor, extended set weight
 
 ## Documentation
