@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
-#include <random>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -46,7 +45,8 @@ namespace qopt::routing {
  * 3. **SWAP Selection**: Otherwise, score candidate SWAPs and insert best one
  * 4. **Lookahead**: Consider future gates when scoring SWAPs
  *
- * The algorithm runs forward and optionally backward passes for refinement.
+ * The initial layout is chosen by reverse traversal (a forward routing pass
+ * followed by a reverse one) before the final forward routing pass.
  *
  * Example:
  * @code
@@ -73,7 +73,6 @@ public:
         : lookahead_depth_(lookahead_depth)
         , decay_factor_(decay_factor)
         , extended_set_weight_(extended_set_weight)
-        , rng_(std::random_device{}())
     {}
 
     [[nodiscard]] std::string name() const override {
@@ -96,8 +95,9 @@ public:
 
         std::size_t original_depth = circuit.depth();
 
-        // Initialize mapping
-        auto mapping = initialMapping(circuit, topology);
+        // SABRE initial mapping via reverse traversal, then the real forward route.
+        auto initial_mapping = computeInitialMapping(circuit, topology);
+        auto mapping = initial_mapping;
         auto reverse_mapping = computeReverseMapping(mapping, topology.numQubits());
 
         // Build the circuit DAG
@@ -109,7 +109,7 @@ public:
 
         // Build result
         RoutingResult result(std::move(routed));
-        result.initial_mapping = identityMapping(circuit.numQubits());
+        result.initial_mapping = initial_mapping;
         result.final_mapping = mapping;
         result.swaps_inserted = swaps;
         result.original_depth = original_depth;
@@ -122,25 +122,50 @@ private:
     std::size_t lookahead_depth_;
     double decay_factor_;
     double extended_set_weight_;
-    mutable std::mt19937 rng_;
+
+    /// @brief Trivial seed layout: logical i -> physical i.
+    [[nodiscard]] static std::vector<std::size_t> trivialLayout(std::size_t num_logical) {
+        std::vector<std::size_t> mapping(num_logical);
+        for (std::size_t i = 0; i < num_logical; ++i) mapping[i] = i;
+        return mapping;
+    }
+
+    /// @brief Returns the circuit with its gate order reversed.
+    [[nodiscard]] static ir::Circuit reversedCircuit(const ir::Circuit& circuit) {
+        ir::Circuit r(circuit.numQubits());
+        const auto& gates = circuit.gates();
+        for (auto it = gates.rbegin(); it != gates.rend(); ++it) {
+            r.addGate(ir::Gate(it->type(), it->qubits(), it->parameter()));
+        }
+        return r;
+    }
 
     /**
-     * @brief Creates an initial logical->physical mapping.
+     * @brief Computes the initial layout via SABRE's reverse-traversal heuristic.
      *
-     * Uses a heuristic based on circuit structure to find a good initial
-     * mapping that reduces SWAP overhead.
+     * Routing the circuit forward settles the mapping toward its end; routing
+     * the reversed circuit from there settles it toward the start. The mapping
+     * after a forward+reverse round is a layout pre-conditioned by the whole
+     * circuit, which SABRE then uses as its initial mapping for the real route
+     * (Li et al., ASPLOS 2019, Section 4.2). The routed circuits produced during
+     * these warm-up passes are discarded; only the mapping is kept.
      */
-    [[nodiscard]] std::vector<std::size_t> initialMapping(
-        const ir::Circuit& circuit,
-        const Topology& /*topology*/) const {
+    [[nodiscard]] std::vector<std::size_t> computeInitialMapping(
+        const ir::Circuit& circuit, const Topology& topology) const {
 
-        std::size_t num_logical = circuit.numQubits();
+        ir::DAG forward = ir::DAG::fromCircuit(circuit);
+        ir::DAG backward = ir::DAG::fromCircuit(reversedCircuit(circuit));
 
-        // Simple initial mapping: identity mapping
-        // A more sophisticated approach would analyze gate patterns
-        std::vector<std::size_t> mapping(num_logical);
-        for (std::size_t i = 0; i < num_logical; ++i) {
-            mapping[i] = i;
+        std::vector<std::size_t> mapping = trivialLayout(circuit.numQubits());
+
+        for (std::size_t round = 0; round < kInitialMappingRounds; ++round) {
+            ir::Circuit scratch(topology.numQubits());
+            auto rev = computeReverseMapping(mapping, topology.numQubits());
+            routeForward(forward, topology, mapping, rev, scratch);
+
+            ir::Circuit scratch_rev(topology.numQubits());
+            rev = computeReverseMapping(mapping, topology.numQubits());
+            routeForward(backward, topology, mapping, rev, scratch_rev);
         }
 
         return mapping;
@@ -162,6 +187,9 @@ private:
 
     /// @brief Sentinel for unmapped physical qubits
     static constexpr std::size_t INVALID_LOGICAL = std::numeric_limits<std::size_t>::max();
+
+    /// @brief Forward+reverse rounds used to settle the initial mapping.
+    static constexpr std::size_t kInitialMappingRounds = 1;
 
     /**
      * @brief Forward pass of SABRE routing.

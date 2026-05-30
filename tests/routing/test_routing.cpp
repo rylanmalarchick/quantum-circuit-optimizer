@@ -13,6 +13,7 @@
 #include "routing/SabreRouter.hpp"
 #include "ir/Circuit.hpp"
 #include "ir/Gate.hpp"
+#include "../util/Simulator.hpp"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -418,12 +419,38 @@ TEST(SabreRouterTest, AdjacentCNOT) {
 TEST(SabreRouterTest, NonAdjacentCNOT) {
     SabreRouter router;
     Circuit c(4);
-    c.addGate(Gate::cnot(0, 3));  // Distance 3 on linear topology
+    c.addGate(Gate::cnot(0, 3));  // Distance 3 under the trivial layout
     auto topology = Topology::linear(4);
 
     auto result = router.route(c, topology);
-    // Should insert SWAPs
-    EXPECT_GT(result.swaps_inserted, 0);
+
+    // A single CNOT can be made adjacent by the initial mapping alone, so the
+    // SWAP count may legitimately be zero; what must hold is a valid, equivalent
+    // routing.
+    for (const auto& gate : result.routed_circuit) {
+        if (gate.numQubits() == 2) {
+            EXPECT_TRUE(topology.connected(gate.qubits()[0], gate.qubits()[1]));
+        }
+    }
+    EXPECT_TRUE(test::routedPreservesUnitary(
+        c, result.routed_circuit, result.initial_mapping, result.final_mapping));
+}
+
+TEST(SabreRouterTest, InsertsSwapsWhenUnavoidable) {
+    // One qubit interacting with three others in sequence cannot be laid out
+    // swap-free on a line, so SWAPs must be inserted regardless of the layout.
+    SabreRouter router;
+    Circuit c(4);
+    c.addGate(Gate::cnot(0, 1));
+    c.addGate(Gate::cnot(0, 2));
+    c.addGate(Gate::cnot(0, 3));
+    auto topology = Topology::linear(4);
+
+    auto result = router.route(c, topology);
+
+    EXPECT_GT(result.swaps_inserted, 0u);
+    EXPECT_TRUE(test::routedPreservesUnitary(
+        c, result.routed_circuit, result.initial_mapping, result.final_mapping));
 }
 
 TEST(SabreRouterTest, AllTwoQubitGatesExecutable) {
@@ -449,21 +476,21 @@ TEST(SabreRouterTest, AllTwoQubitGatesExecutable) {
 TEST(SabreRouterTest, GridTopology) {
     SabreRouter router;
     Circuit c(4);
-    // On 2x2 grid, diagonal qubits are non-adjacent
-    c.addGate(Gate::cnot(0, 3));  // Diagonal on grid
+    // On a 2x2 grid, diagonal qubits are non-adjacent under the trivial layout.
+    c.addGate(Gate::cnot(0, 3));
     auto topology = Topology::grid(2, 2);
 
     auto result = router.route(c, topology);
 
-    // Should insert at least one SWAP
-    EXPECT_GT(result.swaps_inserted, 0);
-
-    // All gates should be on adjacent qubits
+    // The initial mapping may already place the pair adjacent (0 SWAPs); the
+    // routed circuit must still be valid and equivalent.
     for (const auto& gate : result.routed_circuit) {
         if (gate.numQubits() == 2) {
             EXPECT_TRUE(topology.connected(gate.qubits()[0], gate.qubits()[1]));
         }
     }
+    EXPECT_TRUE(test::routedPreservesUnitary(
+        c, result.routed_circuit, result.initial_mapping, result.final_mapping));
 }
 
 TEST(SabreRouterTest, RingTopologyReducesSWAPs) {
@@ -670,4 +697,79 @@ TEST(RoutingIntegrationTest, RandomCircuit) {
             EXPECT_TRUE(topology.connected(gate.qubits()[0], gate.qubits()[1]));
         }
     }
+}
+
+// =============================================================================
+// Routing correctness: the routed circuit must implement the same unitary
+// (connectivity alone does not prove the SWAP insertion + relabel is correct)
+// =============================================================================
+
+namespace {
+
+void expectRoutingPreservesUnitary(const Circuit& c, const Topology& topology) {
+    SabreRouter router;
+    auto result = router.route(c, topology);
+
+    for (const auto& gate : result.routed_circuit) {
+        if (gate.numQubits() == 2) {
+            EXPECT_TRUE(topology.connected(gate.qubits()[0], gate.qubits()[1]))
+                << "non-adjacent gate in routed output: " << gate.toString();
+        }
+    }
+    EXPECT_TRUE(test::routedPreservesUnitary(
+        c, result.routed_circuit, result.initial_mapping, result.final_mapping))
+        << "routed circuit changed the logical unitary";
+}
+
+}  // namespace
+
+TEST(RoutingCorrectnessTest, NonAdjacentCNOTLinear) {
+    Circuit c(4);
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 3));
+    expectRoutingPreservesUnitary(c, Topology::linear(4));
+}
+
+TEST(RoutingCorrectnessTest, DiagonalOnGrid) {
+    Circuit c(4);
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 3));  // diagonal on a 2x2 grid
+    c.addGate(Gate::cz(1, 2));
+    expectRoutingPreservesUnitary(c, Topology::grid(2, 2));
+}
+
+TEST(RoutingCorrectnessTest, GHZLinear) {
+    Circuit c(4);
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 1));
+    c.addGate(Gate::cnot(1, 2));
+    c.addGate(Gate::cnot(2, 3));
+    expectRoutingPreservesUnitary(c, Topology::linear(4));
+}
+
+TEST(RoutingCorrectnessTest, MultipleNonAdjacentLinear) {
+    Circuit c(5);
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 4));
+    c.addGate(Gate::cnot(1, 3));
+    c.addGate(Gate::t(2));
+    c.addGate(Gate::cnot(0, 2));
+    expectRoutingPreservesUnitary(c, Topology::linear(5));
+}
+
+TEST(RoutingCorrectnessTest, RingTopology) {
+    Circuit c(4);
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 2));
+    c.addGate(Gate::cnot(1, 3));
+    expectRoutingPreservesUnitary(c, Topology::ring(4));
+}
+
+// Physical qubits outnumber logical ones: the spare wires are ancillas that
+// must start and end in |0> for the readout to be correct.
+TEST(RoutingCorrectnessTest, AncillaPhysicalQubits) {
+    Circuit c(3);
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 2));
+    expectRoutingPreservesUnitary(c, Topology::linear(5));
 }

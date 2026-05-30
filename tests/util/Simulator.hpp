@@ -129,4 +129,48 @@ inline bool circuitsEquivalent(const ir::Circuit& a, const ir::Circuit& b, doubl
     return unitaryDiffUpToPhase(buildUnitary(a), buildUnitary(b)) < tol;
 }
 
+/**
+ * @brief Builds the logical unitary realised by a routed circuit.
+ *
+ * Places logical qubit q's input bit at physical initial_mapping[q], applies
+ * the routed (physical) circuit including its SWAPs, and reads logical qubit q
+ * back from physical final_mapping[q]. Unused physical qubits start and (for a
+ * correct routing) end in |0>.
+ */
+inline Matrix buildRoutedLogicalUnitary(
+        const ir::Circuit& routed, std::size_t n_logical,
+        const std::vector<std::size_t>& initial_mapping,
+        const std::vector<std::size_t>& final_mapping) {
+    const std::size_t m = routed.numQubits();
+    const std::size_t mdim = std::size_t{1} << m;
+    const std::size_t ndim = std::size_t{1} << n_logical;
+    Matrix u(ndim, StateVector(ndim, Complex(0.0, 0.0)));
+    for (std::size_t x = 0; x < ndim; ++x) {
+        StateVector sv(mdim, Complex(0.0, 0.0));
+        std::size_t in_idx = 0;
+        for (std::size_t q = 0; q < n_logical; ++q)
+            if ((x >> q) & 1u) in_idx |= (std::size_t{1} << initial_mapping[q]);
+        sv[in_idx] = 1.0;
+        for (const auto& g : routed) applyGate(sv, g);
+        for (std::size_t y = 0; y < ndim; ++y) {
+            std::size_t out_idx = 0;
+            for (std::size_t q = 0; q < n_logical; ++q)
+                if ((y >> q) & 1u) out_idx |= (std::size_t{1} << final_mapping[q]);
+            u[y][x] = sv[out_idx];
+        }
+    }
+    return u;
+}
+
+/// @brief True if a routed circuit implements the original's unitary (up to phase).
+inline bool routedPreservesUnitary(
+        const ir::Circuit& original, const ir::Circuit& routed,
+        const std::vector<std::size_t>& initial_mapping,
+        const std::vector<std::size_t>& final_mapping, double tol = 1e-9) {
+    const Matrix a = buildUnitary(original);
+    const Matrix b = buildRoutedLogicalUnitary(
+        routed, original.numQubits(), initial_mapping, final_mapping);
+    return unitaryDiffUpToPhase(a, b) < tol;
+}
+
 }  // namespace qopt::test
