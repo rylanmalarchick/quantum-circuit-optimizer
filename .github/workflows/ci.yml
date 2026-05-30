@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWARNINGS_AS_ERRORS=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DWARNINGS_AS_ERRORS=ON -DBUILD_BENCHMARKS=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -26,5 +26,10 @@ jobs:
       - name: Run Tests
         run: ctest --test-dir build --output-on-failure
 
-      - name: Run Main Executable
-        run: ./build/quantum_circuit_optimizer
+      - name: Smoke-test CLI
+        run: |
+          printf 'OPENQASM 3.0;\nqubit[3] q;\nh q[0];\ncx q[0], q[1];\ncx q[1], q[2];\n' > circuit.qasm
+          ./build/quantum_circuit_optimizer --input circuit.qasm --route --topology linear-3
+
+      - name: Run Benchmarks
+        run: ./build/benchmark_circuits
