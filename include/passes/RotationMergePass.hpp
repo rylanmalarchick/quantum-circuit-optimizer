@@ -151,8 +151,8 @@ private:
         // Same qubit
         if (g1.qubits() != g2.qubits()) return false;
 
-        // Direct edge (adjacent)
-        if (!dag.hasEdge(id1, id2)) return false;
+        // Adjacent on every shared wire (nothing intervening between them).
+        if (!dag.areWireAdjacent(id1, id2)) return false;
 
         return true;
     }

@@ -76,8 +76,10 @@ public:
 
                 const ir::Gate& succ_gate = dag.node(succ_id).gate();
 
-                // Check if they're adjacent on the same qubits
-                if (areAdjacentOnSameQubits(dag, id, succ_id) &&
+                // Both gates must be adjacent on every shared wire, not merely
+                // connected by a single edge: a gate intervening on one wire of
+                // a two-qubit pair would otherwise be skipped over.
+                if (dag.areWireAdjacent(id, succ_id) &&
                     areCancellingPair(gate, succ_gate)) {
                     // Mark both for removal
                     to_remove.insert(id);
@@ -97,42 +99,6 @@ public:
     }
 
 private:
-    /**
-     * @brief Checks if two gates are directly adjacent on the same qubits.
-     *
-     * Gates are adjacent if:
-     * 1. They operate on exactly the same qubits
-     * 2. There's a direct edge between them
-     * 3. There are no other gates between them on those qubits
-     *
-     * @param dag The DAG containing the gates
-     * @param id1 First gate ID
-     * @param id2 Second gate ID (must be successor of id1)
-     * @return true if gates are adjacent on same qubits
-     */
-    [[nodiscard]] static bool areAdjacentOnSameQubits(
-            const ir::DAG& dag,
-            GateId id1,
-            GateId id2) {
-        const ir::Gate& g1 = dag.node(id1).gate();
-        const ir::Gate& g2 = dag.node(id2).gate();
-
-        // Must operate on same qubits
-        if (g1.qubits() != g2.qubits()) {
-            return false;
-        }
-
-        // Must have direct edge
-        if (!dag.hasEdge(id1, id2)) {
-            return false;
-        }
-
-        // For each qubit, verify id2 is the immediate successor of id1
-        // This is guaranteed by the DAG structure if there's a direct edge
-        // and they operate on the same qubits
-        return true;
-    }
-
     /**
      * @brief Checks if two gates cancel to identity.
      *

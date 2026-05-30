@@ -113,6 +113,13 @@ private:
     std::vector<GateId> predecessors_;
     std::vector<GateId> successors_;
 
+    // Per-wire (per-qubit) immediate neighbours. For each qubit this gate acts
+    // on, these record the gate immediately before/after it on that wire. This
+    // is what makes "adjacent on every shared wire" decidable; node-level
+    // predecessors_/successors_ are the deduplicated union used for traversal.
+    std::unordered_map<QubitIndex, GateId> wire_pred_;
+    std::unordered_map<QubitIndex, GateId> wire_succ_;
+
     /// @brief Adds a predecessor to this node.
     void addPredecessor(GateId pred_id) {
         predecessors_.push_back(pred_id);
@@ -248,9 +255,17 @@ public:
         for (auto q : node->gate().qubits()) {
             GateId pred_id = last_gate_on_qubit_[q];
             if (pred_id != INVALID_GATE_ID) {
-                // Add edge: predecessor -> this node
-                node->addPredecessor(pred_id);
-                nodes_.at(pred_id)->addSuccessor(id);
+                // Per-wire link: pred_id is immediately before this node on q.
+                node->wire_pred_[q] = pred_id;
+                nodes_.at(pred_id)->wire_succ_[q] = id;
+                // Node-level edge, deduplicated: a multi-qubit pair may share
+                // more than one wire but must appear as a single edge. The new
+                // node is not in nodes_ yet, so wire it up via the local owner.
+                auto& pred_succs = nodes_.at(pred_id)->successors_;
+                if (std::find(pred_succs.begin(), pred_succs.end(), id) == pred_succs.end()) {
+                    nodes_.at(pred_id)->addSuccessor(id);
+                    node->addPredecessor(pred_id);
+                }
             }
             // Update last gate on this qubit
             last_gate_on_qubit_[q] = id;
@@ -317,42 +332,34 @@ public:
 
         DAGNode& target = *it->second;
 
-        // Reconnect: each predecessor connects to each successor
-        for (GateId pred_id : target.predecessors()) {
+        // Detach all node-level edges incident to the target.
+        for (GateId pred_id : target.predecessors_) {
             nodes_.at(pred_id)->removeSuccessor(id);
-            for (GateId succ_id : target.successors()) {
-                // Avoid duplicates
-                auto& pred_succs = nodes_.at(pred_id)->successors_;
-                if (std::find(pred_succs.begin(), pred_succs.end(), succ_id) == pred_succs.end()) {
-                    nodes_.at(pred_id)->addSuccessor(succ_id);
-                }
-            }
         }
-
-        for (GateId succ_id : target.successors()) {
+        for (GateId succ_id : target.successors_) {
             nodes_.at(succ_id)->removePredecessor(id);
-            for (GateId pred_id : target.predecessors()) {
-                // Avoid duplicates
-                auto& succ_preds = nodes_.at(succ_id)->predecessors_;
-                if (std::find(succ_preds.begin(), succ_preds.end(), pred_id) == succ_preds.end()) {
-                    nodes_.at(succ_id)->addPredecessor(pred_id);
-                }
-            }
         }
 
-        // Update last_gate_on_qubit_ if this was the last gate on any qubit
+        // Reconnect per wire: the gate before the target on qubit q links
+        // directly to the gate after it on q. Only genuinely wire-adjacent
+        // pairs are reconnected, so adjacency stays accurate after removal.
         for (auto q : target.gate().qubits()) {
+            const GateId p = wireNeighbor(target.wire_pred_, q);
+            const GateId s = wireNeighbor(target.wire_succ_, q);
+
+            if (p != INVALID_GATE_ID) {
+                if (s != INVALID_GATE_ID) nodes_.at(p)->wire_succ_[q] = s;
+                else nodes_.at(p)->wire_succ_.erase(q);
+            }
+            if (s != INVALID_GATE_ID) {
+                if (p != INVALID_GATE_ID) nodes_.at(s)->wire_pred_[q] = p;
+                else nodes_.at(s)->wire_pred_.erase(q);
+            }
+            if (p != INVALID_GATE_ID && s != INVALID_GATE_ID) {
+                addNodeLevelEdge(p, s);
+            }
             if (last_gate_on_qubit_[q] == id) {
-                // Find new last gate on this qubit (search predecessors)
-                GateId new_last = INVALID_GATE_ID;
-                for (GateId pred_id : target.predecessors()) {
-                    const auto& pred_qubits = nodes_.at(pred_id)->gate().qubits();
-                    if (std::find(pred_qubits.begin(), pred_qubits.end(), q) != pred_qubits.end()) {
-                        new_last = pred_id;
-                        break;
-                    }
-                }
-                last_gate_on_qubit_[q] = new_last;
+                last_gate_on_qubit_[q] = p;
             }
         }
 
@@ -573,6 +580,44 @@ public:
     }
 
     /**
+     * @brief Returns the gate immediately after @p id on qubit @p q.
+     * @return Successor gate ID on that wire, or INVALID_GATE_ID if none.
+     */
+    [[nodiscard]] GateId wireSuccessor(GateId id, QubitIndex q) const {
+        return wireNeighbor(node(id).wire_succ_, q);
+    }
+
+    /**
+     * @brief Returns the gate immediately before @p id on qubit @p q.
+     * @return Predecessor gate ID on that wire, or INVALID_GATE_ID if none.
+     */
+    [[nodiscard]] GateId wirePredecessor(GateId id, QubitIndex q) const {
+        return wireNeighbor(node(id).wire_pred_, q);
+    }
+
+    /**
+     * @brief Checks if @p b immediately follows @p a on every wire they share.
+     *
+     * Two gates are wire-adjacent only if they act on the same qubits and, for
+     * each of those qubits, no other gate sits between them. This is the
+     * precondition for cancelling or merging the pair: a single shared edge is
+     * not enough when a gate intervenes on another shared wire.
+     *
+     * @param a First gate ID
+     * @param b Second gate ID (candidate immediate successor of @p a)
+     * @return true if the pair is adjacent on all shared qubits
+     */
+    [[nodiscard]] bool areWireAdjacent(GateId a, GateId b) const {
+        if (!hasNode(a) || !hasNode(b)) return false;
+        const auto& qa = node(a).gate().qubits();
+        if (qa != node(b).gate().qubits()) return false;
+        for (auto q : qa) {
+            if (wireSuccessor(a, q) != b) return false;
+        }
+        return true;
+    }
+
+    /**
      * @brief Returns all edges in the DAG.
      * @return Vector of (from, to) pairs
      */
@@ -633,6 +678,22 @@ private:
     GateId next_gate_id_;
     std::unordered_map<GateId, std::unique_ptr<DAGNode>> nodes_;
     std::vector<GateId> last_gate_on_qubit_;  // Track last gate on each qubit
+
+    /// @brief Looks up a wire neighbour map entry, returning INVALID if absent.
+    [[nodiscard]] static GateId wireNeighbor(
+            const std::unordered_map<QubitIndex, GateId>& wire, QubitIndex q) {
+        auto it = wire.find(q);
+        return it == wire.end() ? INVALID_GATE_ID : it->second;
+    }
+
+    /// @brief Adds a deduplicated node-level edge from -> to.
+    void addNodeLevelEdge(GateId from_id, GateId to_id) {
+        auto& succs = nodes_.at(from_id)->successors_;
+        if (std::find(succs.begin(), succs.end(), to_id) == succs.end()) {
+            nodes_.at(from_id)->addSuccessor(to_id);
+            nodes_.at(to_id)->addPredecessor(from_id);
+        }
+    }
 
     /**
      * @brief Validates that a gate's qubits are within DAG bounds.

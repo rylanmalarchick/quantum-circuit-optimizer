@@ -18,6 +18,7 @@
 #include "ir/Circuit.hpp"
 #include "ir/DAG.hpp"
 #include "ir/Gate.hpp"
+#include "../util/Simulator.hpp"
 
 #include <gtest/gtest.h>
 #include <cmath>
@@ -878,4 +879,118 @@ TEST(EdgeCaseTest, NoOptimizationOpportunities) {
     pm.run(circuit);
     
     EXPECT_EQ(circuit.numGates(), initial);  // No change
+}
+
+// =============================================================================
+// Correctness: every pass must preserve the unitary (semantic equivalence)
+// =============================================================================
+
+namespace {
+
+// Runs the full default pipeline on a copy and asserts the optimized circuit
+// implements the same unitary (up to global phase) as the input.
+void expectPipelinePreservesUnitary(const Circuit& input) {
+    Circuit optimized = input.clone();
+    PassManager pm;
+    pm.addPass(std::make_unique<CancellationPass>());
+    pm.addPass(std::make_unique<CommutationPass>());
+    pm.addPass(std::make_unique<RotationMergePass>());
+    pm.addPass(std::make_unique<IdentityEliminationPass>());
+    pm.run(optimized);
+    EXPECT_TRUE(test::circuitsEquivalent(input, optimized))
+        << "optimized circuit is not equivalent to the input";
+}
+
+}  // namespace
+
+// Regression for the cross-wire cancellation bug: CNOT(0,1) and CNOT(0,1) with
+// an X(0) between them are NOT inverses (CNOT*(X tensor I)*CNOT = X tensor X),
+// so the two CNOTs must not cancel across the intervening gate on the control.
+TEST(CancellationPassTest, TwoQubitGatesWithInterveningGateDoNotCancel) {
+    Circuit circuit(2);
+    circuit.addGate(Gate::cnot(0, 1));
+    circuit.addGate(Gate::x(0));      // on the control wire, between the CNOTs
+    circuit.addGate(Gate::cnot(0, 1));
+
+    DAG dag = DAG::fromCircuit(circuit);
+    CancellationPass pass;
+    pass.run(dag);
+
+    EXPECT_EQ(dag.numNodes(), 3u);
+    EXPECT_EQ(pass.gatesRemoved(), 0u);
+}
+
+// Same scenario with the intervening gate on the target wire.
+TEST(CancellationPassTest, TwoQubitGatesWithInterveningTargetGateDoNotCancel) {
+    Circuit circuit(2);
+    circuit.addGate(Gate::cnot(0, 1));
+    circuit.addGate(Gate::x(1));      // on the target wire
+    circuit.addGate(Gate::cnot(0, 1));
+
+    DAG dag = DAG::fromCircuit(circuit);
+    CancellationPass pass;
+    pass.run(dag);
+
+    EXPECT_EQ(dag.numNodes(), 3u);
+}
+
+TEST(SemanticEquivalenceTest, CNOTInterveningGateOnControl) {
+    Circuit c(2);
+    c.addGate(Gate::cnot(0, 1));
+    c.addGate(Gate::x(0));
+    c.addGate(Gate::cnot(0, 1));
+    expectPipelinePreservesUnitary(c);
+}
+
+TEST(SemanticEquivalenceTest, ZZInteractionPattern) {
+    // CNOT; Rz; CNOT is the ZZ rotation building block in QFT/QAOA; its CNOTs
+    // must survive optimization.
+    Circuit c(2);
+    c.addGate(Gate::cnot(0, 1));
+    c.addGate(Gate::rz(1, 0.5));
+    c.addGate(Gate::cnot(0, 1));
+    expectPipelinePreservesUnitary(c);
+}
+
+TEST(SemanticEquivalenceTest, AdjacentCNOTsStillCancel) {
+    // The genuinely adjacent case must still optimize away (and stay correct).
+    Circuit c(2);
+    c.addGate(Gate::cnot(0, 1));
+    c.addGate(Gate::cnot(0, 1));
+    Circuit optimized = c.clone();
+    PassManager pm;
+    pm.addPass(std::make_unique<CancellationPass>());
+    pm.run(optimized);
+    EXPECT_EQ(optimized.numGates(), 0u);
+    EXPECT_TRUE(test::circuitsEquivalent(c, optimized));
+}
+
+TEST(SemanticEquivalenceTest, MixedFourQubitCircuit) {
+    Circuit c(4);
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 1));
+    c.addGate(Gate::rz(1, constants::PI_4));
+    c.addGate(Gate::cnot(2, 1));
+    c.addGate(Gate::t(2));
+    c.addGate(Gate::cnot(2, 1));
+    c.addGate(Gate::h(0));
+    c.addGate(Gate::cnot(0, 3));
+    c.addGate(Gate::rz(1, constants::PI_4));
+    expectPipelinePreservesUnitary(c);
+}
+
+TEST(SemanticEquivalenceTest, QFTLikeThreeQubit) {
+    // Mirrors the benchmark QFT generator's CNOT-Rz-CNOT decomposition.
+    Circuit c(3);
+    for (std::size_t i = 0; i < 3; ++i) {
+        c.addGate(Gate::h(i));
+        for (std::size_t j = i + 1; j < 3; ++j) {
+            double angle = constants::PI / std::pow(2.0, static_cast<double>(j - i));
+            c.addGate(Gate::cnot(j, i));
+            c.addGate(Gate::rz(i, -angle / 2));
+            c.addGate(Gate::cnot(j, i));
+            c.addGate(Gate::rz(i, angle / 2));
+        }
+    }
+    expectPipelinePreservesUnitary(c);
 }
