@@ -1048,3 +1048,18 @@ TEST(SemanticEquivalenceTest, QFTLikeThreeQubit) {
     }
     expectPipelinePreservesUnitary(c);
 }
+
+// 64 qubits is well beyond the former 30-qubit cap; the symbolic passes must
+// still run at that width (no statevector is built here).
+TEST(ScalabilityTest, OptimizesWideCircuitBeyondOldLimit) {
+    const std::size_t nq = 64;
+    Circuit c(nq);
+    for (std::size_t q = 0; q < nq; ++q) {
+        c.addGate(Gate::h(static_cast<QubitIndex>(q)));
+        c.addGate(Gate::h(static_cast<QubitIndex>(q)));  // each pair cancels
+    }
+    PassManager pm;
+    pm.addPass(std::make_unique<CancellationPass>());
+    pm.run(c);
+    EXPECT_EQ(c.numGates(), 0u);
+}

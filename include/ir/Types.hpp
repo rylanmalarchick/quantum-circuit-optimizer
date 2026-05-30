@@ -34,8 +34,14 @@ inline constexpr QubitIndex INVALID_QUBIT = std::numeric_limits<QubitIndex>::max
 
 namespace constants {
 
-/// @brief Maximum number of qubits supported (practical limit for simulation)
-inline constexpr std::size_t MAX_QUBITS = 30;
+/// @brief Upper bound on register size.
+///
+/// The library is symbolic (it stores and rewrites gate lists; it does not
+/// simulate statevectors), so this is a resource sanity bound, not a 2^n
+/// limit. Per-qubit storage is linear; the routing distance cache is the only
+/// structure quadratic in a device's qubit count (a 1024-qubit topology caches
+/// ~8 MB of distances).
+inline constexpr std::size_t MAX_QUBITS = 1024;
 
 /// @brief Default tolerance for floating-point comparisons
 inline constexpr double TOLERANCE = 1e-10;
