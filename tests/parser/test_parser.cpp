@@ -355,6 +355,35 @@ TEST_F(ParserTest, ErrorAtToken) {
     }
 }
 
+TEST_F(ParserTest, ReportsMultipleErrors) {
+    // Two independent malformed statements should both be reported: the parser
+    // recovers after the first error and keeps going.
+    try {
+        parse("OPENQASM 3.0; qubit[2] q; a b; c d;");
+        FAIL() << "Expected QASMParseException";
+    } catch (const QASMParseException& e) {
+        EXPECT_GE(e.numErrors(), 2u);
+    }
+}
+
+TEST_F(ParserTest, RejectsUndeclaredRegister) {
+    try {
+        parse("OPENQASM 3.0; qubit[2] q; h r[0];");
+        FAIL() << "Expected QASMParseException";
+    } catch (const QASMParseException& e) {
+        EXPECT_GE(e.numErrors(), 1u);
+    }
+}
+
+TEST_F(ParserTest, RejectsQubitIndexOutOfRange) {
+    try {
+        parse("OPENQASM 3.0; qubit[2] q; h q[5];");
+        FAIL() << "Expected QASMParseException";
+    } catch (const QASMParseException& e) {
+        EXPECT_GE(e.numErrors(), 1u);
+    }
+}
+
 // =============================================================================
 // Full Program Tests
 // =============================================================================

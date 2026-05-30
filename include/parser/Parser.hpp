@@ -94,23 +94,37 @@ public:
      */
     [[nodiscard]] ParseResult parse() {
         ParseResult result;
-        
+
         // Parse version declaration (required)
         parseVersionDeclaration();
-        
-        // Parse statements until EOF
-        while (!check(TokenType::EndOfFile) && !hadError_) {
+        if (panicMode_) synchronize();
+
+        // Parse statements until EOF, recovering after each error so multiple
+        // independent problems are reported in one pass. The loop is bounded:
+        // every iteration consumes at least one token (parseStatement and
+        // synchronize advance, and the stall guard forces progress otherwise),
+        // so it cannot run longer than the token stream (JPL Rule 2).
+        while (!check(TokenType::EndOfFile)) {
+            const std::size_t line = current_.line();
+            const std::size_t col = current_.column();
+
             parseStatement();
+            if (panicMode_) synchronize();
+
+            if (!check(TokenType::EndOfFile) &&
+                current_.line() == line && current_.column() == col) {
+                advance();  // forward-progress guard: never spin on one token
+            }
         }
-        
+
         if (hadError_) {
             throw QASMParseException(errors_);
         }
-        
+
         // Build the circuit from parsed data
         result.circuit = buildCircuit();
         result.warnings = std::move(warnings_);
-        
+
         return result;
     }
 
@@ -480,13 +494,29 @@ private:
         
         std::string regName = current_.lexeme();
         advance();
-        
+
         size_t index = 0;
         if (match(TokenType::LeftBracket)) {
             index = parseIntegerLiteral("qubit index");
             consume(TokenType::RightBracket, "Expected ']' after qubit index");
         }
-        
+
+        // Validate against declared registers here so a bad reference is
+        // reported as a parse error rather than silently dropped at build time.
+        auto it = registerIndex_.find(regName);
+        if (it == registerIndex_.end()) {
+            errorAtPrevious("Use of undeclared register '" + regName + "'");
+        } else {
+            const RegisterInfo& reg = registers_[it->second];
+            if (!reg.isQubit) {
+                errorAtPrevious("Register '" + regName + "' is not a qubit register");
+            } else if (index >= reg.size) {
+                errorAtPrevious("Qubit index " + std::to_string(index) +
+                                " out of range for register '" + regName +
+                                "' of size " + std::to_string(reg.size));
+            }
+        }
+
         return {regName, index};
     }
 
@@ -710,7 +740,8 @@ private:
             for (const auto& [regName, idx] : pg.qubits) {
                 auto it = qubitOffset.find(regName);
                 if (it == qubitOffset.end()) {
-                    // Error: undeclared register - should have been caught earlier
+                    // Undeclared registers are rejected during parsing, so a
+                    // circuit that parsed cleanly never reaches this branch.
                     continue;
                 }
                 qubitIndices.push_back(static_cast<QubitIndex>(it->second + idx));
