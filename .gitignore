@@ -62,3 +62,6 @@ Thumbs.db
 # Editor backups
 *.bak
 *.orig
+
+# Local agent notes (kept out of the repo)
+AGENTS.md
