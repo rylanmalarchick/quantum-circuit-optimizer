@@ -222,16 +222,7 @@ to remove, so their reduction is 0%; random circuits show real reductions:
   - [Optimization Passes](docs/tutorial/03-optimization.md)
   - [Qubit Routing](docs/tutorial/04-routing.md)
 
-## Roadmap
-
-- [x] **Sprint 1A**: Foundation (Gate, Circuit, build system, CI)
-- [x] **Sprint 1B**: DAG IR for optimization
-- [x] **Sprint 2**: OpenQASM 3.0 parser
-- [x] **Sprint 3**: Optimization passes
-- [x] **Sprint 4**: Qubit routing (SABRE)
-- [x] **Sprint 5**: Documentation and polish
-
-### Future Plans
+## Possible future work
 
 - Gate definitions and custom gates
 - Classical control flow
@@ -252,12 +243,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 ## Author
 
 Rylan Malarchick (rylan1012@gmail.com)
-
-## Contributing
-
-Contributions are welcome! Please read the documentation and ensure all tests pass before submitting a PR.
-
-```bash
-# Run tests before committing
-cmake --build build && ctest --test-dir build --output-on-failure
-```
