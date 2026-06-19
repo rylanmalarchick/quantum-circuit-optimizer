@@ -1,5 +1,7 @@
 # Quantum Circuit Optimizer
 
+> **Status:** not actively maintained. Left up as a reference.
+
 A quantum circuit compiler in C++17 that parses OpenQASM 3.0, optimizes circuits through multiple passes, and performs topology-aware qubit routing.
 
 [![Build Status](https://github.com/rylanmalarchick/quantum-circuit-optimizer/workflows/CI/badge.svg)](https://github.com/rylanmalarchick/quantum-circuit-optimizer/actions)
